@@ -1,0 +1,2885 @@
+openapi: 3.0.3
+info:
+  title: TradeMind API
+  description: 外贸ERP智能助手系统 API规范
+  version: 1.0.0
+  contact:
+    name: TradeMind Team
+
+servers:
+  - url: https://api.trademind.io/v1
+    description: 生产环境 v1
+  - url: https://api.trademind.io/v2
+    description: 生产环境 v2 (预留)
+  - url: http://localhost:8080/v1
+    description: 开发环境
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+tags:
+  - name: Auth
+    description: 认证授权
+  - name: Tenant
+    description: 租户管理
+  - name: User
+    description: 用户管理
+  - name: Session
+    description: 会话管理
+  - name: Agent
+    description: Agent服务
+  - name: File
+    description: 文件管理
+  - name: ERP
+    description: ERP集成
+  - name: Token
+    description: Token消耗
+  - name: Subscription
+    description: 订阅管理
+  - name: Admin
+    description: 后台管理
+
+paths:
+  # ==================== 认证授权 ====================
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: 用户登录
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - login_id
+                - password
+              properties:
+                login_id:
+                  type: string
+                  description: 登录ID (手机号/邮箱/用户名)
+                password:
+                  type: string
+                  description: 密码
+                tenant_id:
+                  type: integer
+                  description: 租户ID (可选)
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: 用户名或密码错误
+        '403':
+          description: 账号已被禁用
+
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      summary: 用户登出
+      operationId: logout
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 登出成功
+
+  /auth/refresh:
+    post:
+      tags:
+        - Auth
+      summary: 刷新Token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refresh_token
+              properties:
+                refresh_token:
+                  type: string
+                  description: 刷新Token
+      responses:
+        '200':
+          description: Token刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      summary: 用户注册
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+                - phone
+                - tenant_id
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                phone:
+                  type: string
+                email:
+                  type: string
+                real_name:
+                  type: string
+                tenant_id:
+                  type: integer
+      responses:
+        '201':
+          description: 注册成功
+
+  /auth/change-password:
+    post:
+      tags:
+        - Auth
+      summary: 修改密码
+      operationId: changePassword
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - old_password
+                - new_password
+              properties:
+                old_password:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: 密码修改成功
+
+  # ==================== 租户管理 ====================
+  /tenants:
+    get:
+      tags:
+        - Tenant
+      summary: 获取租户列表 (管理员)
+      operationId: listTenants
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: integer
+            description: 状态 0=禁用 1=正常 2=试用
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantListResponse'
+
+    post:
+      tags:
+        - Tenant
+      summary: 创建租户
+      operationId: createTenant
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantCreateRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+
+  /tenants/{id}:
+    get:
+      tags:
+        - Tenant
+      summary: 获取租户详情
+      operationId: getTenant
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+
+    put:
+      tags:
+        - Tenant
+      summary: 更新租户信息
+      operationId: updateTenant
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantUpdateRequest'
+      responses:
+        '200':
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+
+    delete:
+      tags:
+        - Tenant
+      summary: 删除租户
+      operationId: deleteTenant
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: 删除成功
+
+  /tenants/{id}/config:
+    get:
+      tags:
+        - Tenant
+      summary: 获取租户配置
+      operationId: getTenantConfig
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantConfig'
+
+    put:
+      tags:
+        - Tenant
+      summary: 更新租户配置
+      operationId: updateTenantConfig
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantConfigUpdateRequest'
+      responses:
+        '200':
+          description: 更新成功
+
+  /tenants/{id}/package:
+    put:
+      tags:
+        - Tenant
+      summary: 更新租户套餐
+      operationId: updateTenantPackage
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - package_level
+                - duration
+              properties:
+                package_level:
+                  type: string
+                  enum: [basic, pro, enterprise]
+                duration:
+                  type: integer
+                  description: 订阅时长(单位月)
+      responses:
+        '200':
+          description: 套餐更新成功
+
+  # ==================== 用户管理 ====================
+  /users:
+    get:
+      tags:
+        - User
+      summary: 获取用户列表
+      operationId: listUsers
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: role
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+
+    post:
+      tags:
+        - User
+      summary: 创建用户
+      operationId: createUser
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /users/{id}:
+    get:
+      tags:
+        - User
+      summary: 获取用户详情
+      operationId: getUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+    put:
+      tags:
+        - User
+      summary: 更新用户信息
+      operationId: updateUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdateRequest'
+      responses:
+        '200':
+          description: 更新成功
+
+    delete:
+      tags:
+        - User
+      summary: 删除用户
+      operationId: deleteUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: 删除成功
+
+  /users/{id}/role:
+    put:
+      tags:
+        - User
+      summary: 更新用户角色
+      operationId: updateUserRole
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - role
+              properties:
+                role:
+                  type: string
+                  enum: [admin, manager, employee, customer]
+      responses:
+        '200':
+          description: 角色更新成功
+
+  /users/me:
+    get:
+      tags:
+        - User
+      summary: 获取当前用户信息
+      operationId: getCurrentUser
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /users/me/profile:
+    put:
+      tags:
+        - User
+      summary: 更新当前用户信息
+      operationId: updateCurrentUserProfile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                real_name:
+                  type: string
+                email:
+                  type: string
+                avatar:
+                  type: string
+      responses:
+        '200':
+          description: 更新成功
+
+  # ==================== 会话管理 ====================
+  /sessions:
+    get:
+      tags:
+        - Session
+      summary: 获取会话列表
+      operationId: listSessions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: user_id
+          in: query
+          schema:
+            type: integer
+        - name: customer_id
+          in: query
+          schema:
+            type: integer
+        - name: channel
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionListResponse'
+
+    post:
+      tags:
+        - Session
+      summary: 创建会话
+      operationId: createSession
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - channel
+              properties:
+                channel:
+                  type: string
+                  enum: [pc, app, feishu, whatsapp, web]
+                title:
+                  type: string
+                customer_id:
+                  type: integer
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+
+  /sessions/{id}:
+    get:
+      tags:
+        - Session
+      summary: 获取会话详情
+      operationId: getSession
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+
+    delete:
+      tags:
+        - Session
+      summary: 结束会话
+      operationId: endSession
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: 会话已结束
+
+  /sessions/{id}/messages:
+    get:
+      tags:
+        - Session
+      summary: 获取会话消息历史
+      operationId: getSessionMessages
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResponse'
+
+  # ==================== Agent服务 ====================
+  /agent/chat:
+    post:
+      tags:
+        - Agent
+      summary: 发送聊天消息
+      operationId: chat
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - session_id
+                - message
+              properties:
+                session_id:
+                  type: integer
+                  description: 会话ID
+                message:
+                  type: string
+                  description: 消息内容
+                attachments:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                        enum: [image, file]
+                      url:
+                        type: string
+      responses:
+        '200':
+          description: 消息处理成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+
+  /agent/chat/stream:
+    post:
+      tags:
+        - Agent
+      summary: 流式聊天 (SSE)
+      operationId: chatStream
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - session_id
+                - message
+              properties:
+                session_id:
+                  type: integer
+                message:
+                  type: string
+      responses:
+        '200':
+          description: 流式响应
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /agent/import:
+    post:
+      tags:
+        - Agent
+      summary: 数据导入 (文件/自然语言)
+      operationId: importData
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum: [file, natural_language]
+                  description: 导入类型
+                file_id:
+                  type: string
+                  description: 文件ID (type=file时必填)
+                content:
+                  type: string
+                  description: 自然语言描述 (type=natural_language时必填)
+                target_doctype:
+                  type: string
+                  description: 目标ERP DocType
+                dry_run:
+                  type: boolean
+                  default: false
+                  description: 是否试运行
+      responses:
+        '200':
+          description: 导入成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportResponse'
+
+  /agent/query:
+    post:
+      tags:
+        - Agent
+      summary: 自然语言数据查询
+      operationId: queryData
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: 自然语言查询
+                target_doctype:
+                  type: string
+                  description: 目标DocType
+                generate_chart:
+                  type: boolean
+                  default: false
+                  description: 是否生成图表
+                export_format:
+                  type: string
+                  enum: [none, xlsx, csv, pdf]
+                  default: none
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+
+  /agent/tasks:
+    get:
+      tags:
+        - Agent
+      summary: 获取任务列表
+      operationId: listTasks
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: session_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskListResponse'
+
+  /agent/tasks/{id}:
+    get:
+      tags:
+        - Agent
+      summary: 获取任务详情
+      operationId: getTask
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+
+  /agent/tasks/{id}/cancel:
+    post:
+      tags:
+        - Agent
+      summary: 取消任务
+      operationId: cancelTask
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 任务已取消
+
+  /agent/tools:
+    get:
+      tags:
+        - Agent
+      summary: 获取可用工具列表
+      operationId: listTools
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: enabled_only
+          in: query
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolListResponse'
+
+  /agent/tools/{name}/execute:
+    post:
+      tags:
+        - Agent
+      summary: 执行工具
+      operationId: executeTool
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: 执行成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolExecutionResponse'
+
+  # ==================== 文件管理 ====================
+  /files/upload:
+    post:
+      tags:
+        - File
+      summary: 文件上传
+      operationId: uploadFile
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                category:
+                  type: string
+                  enum: [document, image, audio, other]
+                  default: other
+      responses:
+        '200':
+          description: 上传成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileUploadResponse'
+
+  /files/{id}:
+    get:
+      tags:
+        - File
+      summary: 获取文件信息
+      operationId: getFile
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/File'
+
+    delete:
+      tags:
+        - File
+      summary: 删除文件
+      operationId: deleteFile
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 删除成功
+
+  /files/{id}/download:
+    get:
+      tags:
+        - File
+      summary: 下载文件
+      operationId: downloadFile
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 文件下载
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /files/{id}/parse:
+    post:
+      tags:
+        - File
+      summary: 解析文件
+      operationId: parseFile
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                parse_type:
+                  type: string
+                  enum: [auto, excel, csv, pdf, image]
+                  default: auto
+                target_structure:
+                  type: object
+                  description: 期望的目标结构
+      responses:
+        '200':
+          description: 解析成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParseResponse'
+
+  /files:
+    get:
+      tags:
+        - File
+      summary: 获取文件列表
+      operationId: listFiles
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileListResponse'
+
+  # ==================== ERP集成 ====================
+  /erp/item:
+    get:
+      tags:
+        - ERP
+      summary: 查询商品
+      operationId: queryItems
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ERPItemListResponse'
+
+    post:
+      tags:
+        - ERP
+      summary: 创建商品
+      operationId: createItem
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ERPItemCreateRequest'
+      responses:
+        '201':
+          description: 创建成功
+
+  /erp/item/{id}:
+    get:
+      tags:
+        - ERP
+      summary: 获取商品详情
+      operationId: getItem
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+
+    put:
+      tags:
+        - ERP
+      summary: 更新商品
+      operationId: updateItem
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: 更新成功
+
+    delete:
+      tags:
+        - ERP
+      summary: 删除商品
+      operationId: deleteItem
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: 删除成功
+
+  /erp/customer:
+    get:
+      tags:
+        - ERP
+      summary: 查询客户
+      operationId: queryCustomers
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ERPCustomerListResponse'
+
+    post:
+      tags:
+        - ERP
+      summary: 创建客户
+      operationId: createCustomer
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '201':
+          description: 创建成功
+
+  /erp/customer/{id}:
+    get:
+      tags:
+        - ERP
+      summary: 获取客户详情
+      operationId: getCustomer
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+
+    put:
+      tags:
+        - ERP
+      summary: 更新客户
+      operationId: updateCustomer
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: 更新成功
+
+  /erp/supplier:
+    get:
+      tags:
+        - ERP
+      summary: 查询供应商
+      operationId: querySuppliers
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+          description: 查询成功
+
+    post:
+      tags:
+        - ERP
+      summary: 创建供应商
+      operationId: createSupplier
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '201':
+          description: 创建成功
+
+  /erp/order:
+    get:
+      tags:
+        - ERP
+      summary: 查询订单
+      operationId: queryOrders
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: keyword
+          in: query
+          schema:
+            type: string
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ERPOrderListResponse'
+
+    post:
+      tags:
+        - ERP
+      summary: 创建订单
+      operationId: createOrder
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '201':
+          description: 创建成功
+
+  /erp/order/{id}:
+    get:
+      tags:
+        - ERP
+      summary: 获取订单详情
+      operationId: getOrder
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+
+    put:
+      tags:
+        - ERP
+      summary: 更新订单
+      operationId: updateOrder
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: 更新成功
+
+  /erp/stock:
+    get:
+      tags:
+        - ERP
+      summary: 查询库存
+      operationId: queryStock
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: item_code
+          in: query
+          schema:
+            type: string
+        - name: warehouse
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 查询成功
+
+  /erp/stock/balance:
+    get:
+      tags:
+        - ERP
+      summary: 获取库存余额
+      operationId: getStockBalance
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: item_code
+          in: query
+          schema:
+            type: string
+        - name: warehouse
+          in: query
+          schema:
+            type: string
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: 获取成功
+
+  /erp/sync:
+    post:
+      tags:
+        - ERP
+      summary: 同步数据到ERP
+      operationId: syncToERP
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - doctype
+                - data
+              properties:
+                doctype:
+                  type: string
+                  description: ERP DocType
+                data:
+                  type: object
+                  description: 数据
+                mode:
+                  type: string
+                  enum: [create, update]
+                  default: create
+      responses:
+        '200':
+          description: 同步成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResponse'
+
+  /erp/webhook:
+    post:
+      tags:
+        - ERP
+      summary: ERP Webhook回调
+      operationId: erpWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: 处理成功
+
+  # ==================== Token消耗 ====================
+  /tokens/records:
+    get:
+      tags:
+        - Token
+      summary: 获取Token消耗记录
+      operationId: listTokenRecords
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: user_id
+          in: query
+          schema:
+            type: integer
+        - name: session_id
+          in: query
+          schema:
+            type: integer
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRecordListResponse'
+
+  /tokens/statistics:
+    get:
+      tags:
+        - Token
+      summary: 获取Token消耗统计
+      operationId: getTokenStatistics
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: user_id
+          in: query
+          schema:
+            type: integer
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenStatistics'
+
+  /tokens/usage:
+    get:
+      tags:
+        - Token
+      summary: 获取当前租户Token使用量
+      operationId: getTokenUsage
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenUsage'
+
+  # ==================== 订阅管理 ====================
+  /subscriptions:
+    get:
+      tags:
+        - Subscription
+      summary: 获取订阅记录
+      operationId: listSubscriptions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+
+    post:
+      tags:
+        - Subscription
+      summary: 创建订阅
+      operationId: createSubscription
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - package_level
+                - duration
+                - amount
+              properties:
+                tenant_id:
+                  type: integer
+                package_level:
+                  type: string
+                  enum: [basic, pro, enterprise]
+                duration:
+                  type: integer
+                amount:
+                  type: number
+                type:
+                  type: integer
+                  enum: [1, 2]
+                  default: 1
+                  description: 1=单次订阅 2=自动续费
+      responses:
+        '201':
+          description: 创建成功
+
+  /subscriptions/packages:
+    get:
+      tags:
+        - Subscription
+      summary: 获取套餐列表
+      operationId: listPackages
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageListResponse'
+
+  /subscriptions/packages/{id}:
+    get:
+      tags:
+        - Subscription
+      summary: 获取套餐详情
+      operationId: getPackage
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 获取成功
+
+  /transactions:
+    get:
+      tags:
+        - Subscription
+      summary: 获取交易记录
+      operationId: listTransactions
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: type
+          in: query
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+
+  # ==================== IM渠道 ====================
+  /im/webhook/{platform}:
+    post:
+      tags:
+        - IM
+      summary: IM平台Webhook
+      operationId: imWebhook
+      parameters:
+        - name: platform
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [feishu, whatsapp, wechat, dingtalk]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: 处理成功
+
+  /im/channels:
+    get:
+      tags:
+        - IM
+      summary: 获取IM渠道列表
+      operationId: listIMChannels
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 获取成功
+
+    post:
+      tags:
+        - IM
+      summary: 创建IM渠道
+      operationId: createIMChannel
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - platform
+                - config
+              properties:
+                platform:
+                  type: string
+                  enum: [feishu, whatsapp, wechat, dingtalk]
+                name:
+                  type: string
+                config:
+                  type: object
+      responses:
+        '201':
+          description: 创建成功
+
+  /im/channels/{id}:
+    get:
+      tags:
+        - IM
+      summary: 获取IM渠道详情
+      operationId: getIMChannel
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 获取成功
+
+    put:
+      tags:
+        - IM
+      summary: 更新IM渠道
+      operationId: updateIMChannel
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+
+    delete:
+      tags:
+        - IM
+      summary: 删除IM渠道
+      operationId: deleteIMChannel
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '204':
+          description: 删除成功
+
+  /im/channels/{id}/test:
+    post:
+      tags:
+        - IM
+      summary: 测试IM渠道
+      operationId: testIMChannel
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 测试成功
+
+  # ==================== 后台管理 ====================
+  /admin/config:
+    get:
+      tags:
+        - Admin
+      summary: 获取系统配置
+      operationId: getSystemConfig
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 获取成功
+
+    put:
+      tags:
+        - Admin
+      summary: 更新系统配置
+      operationId: updateSystemConfig
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                llm_config:
+                  type: object
+                tool_permissions:
+                  type: array
+                  items:
+                    type: string
+                sensitive_words:
+                  type: array
+                  items:
+                    type: string
+                api_quotas:
+                  type: object
+      responses:
+        '200':
+          description: 更新成功
+
+  /admin/metrics:
+    get:
+      tags:
+        - Admin
+      summary: 获取运营指标
+      operationId: getMetrics
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: 获取成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsResponse'
+
+  /admin/audit-logs:
+    get:
+      tags:
+        - Admin
+      summary: 获取审计日志
+      operationId: listAuditLogs
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: user_id
+          in: query
+          schema:
+            type: integer
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+
+  /admin/users:
+    get:
+      tags:
+        - Admin
+      summary: 获取所有租户用户
+      operationId: listAllUsers
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: integer
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: 获取成功
+
+  /admin/rate-limits:
+    get:
+      tags:
+        - Admin
+      summary: 获取限流配置
+      operationId: getRateLimits
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 获取成功
+
+    put:
+      tags:
+        - Admin
+      summary: 更新限流配置
+      operationId: updateRateLimits
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                default_qps:
+                  type: integer
+                default_qpm:
+                  type: integer
+                package_overrides:
+                  type: object
+      responses:
+        '200':
+          description: 更新成功
+
+  /admin/models:
+    get:
+      tags:
+        - Admin
+      summary: 获取LLM模型配置
+      operationId: listModels
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 获取成功
+
+    post:
+      tags:
+        - Admin
+      summary: 添加LLM模型
+      operationId: createModel
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - provider
+                - model_id
+              properties:
+                name:
+                  type: string
+                provider:
+                  type: string
+                  enum: [openai, anthropic, alibaba, baidu]
+                model_id:
+                  type: string
+                enabled:
+                  type: boolean
+                  default: true
+      responses:
+        '201':
+          description: 添加成功
+
+    put:
+      tags:
+        - Admin
+      summary: 更新LLM模型
+      operationId: updateModel
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+
+  /admin/health:
+    get:
+      tags:
+        - Admin
+      summary: 系统健康检查
+      operationId: healthCheck
+      responses:
+        '200':
+          description: 系统正常
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    # Auth
+    LoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+        token_type:
+          type: string
+          default: Bearer
+        user:
+          $ref: '#/components/schemas/User'
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+        token_type:
+          type: string
+
+    # Tenant
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        contact_name:
+          type: string
+        contact_phone:
+          type: string
+        contact_email:
+          type: string
+        package_level:
+          type: string
+          enum: [basic, pro, enterprise]
+        package_expire_at:
+          type: string
+          format: date-time
+        llm_query_qpm:
+          type: integer
+        status:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TenantCreateRequest:
+      type: object
+      required:
+        - name
+        - contact_phone
+      properties:
+        name:
+          type: string
+        contact_name:
+          type: string
+        contact_phone:
+          type: string
+        contact_email:
+          type: string
+
+    TenantUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        contact_name:
+          type: string
+        contact_phone:
+          type: string
+        contact_email:
+          type: string
+
+    TenantListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tenant'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    TenantConfig:
+      type: object
+      properties:
+        reply_style:
+          type: string
+        work_hours:
+          type: object
+        languages:
+          type: array
+          items:
+            type: string
+        sensitive_words:
+          type: array
+          items:
+            type: string
+
+    TenantConfigUpdateRequest:
+      type: object
+      properties:
+        reply_style:
+          type: string
+        work_hours:
+          type: object
+        languages:
+          type: array
+          items:
+            type: string
+        sensitive_words:
+          type: array
+          items:
+            type: string
+
+    # User
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenant_id:
+          type: integer
+        username:
+          type: string
+        real_name:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, manager, employee, customer]
+        avatar:
+          type: string
+        status:
+          type: integer
+        last_login_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    UserCreateRequest:
+      type: object
+      required:
+        - username
+        - password
+        - phone
+        - tenant_id
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        real_name:
+          type: string
+        role:
+          type: string
+          enum: [admin, manager, employee, customer]
+          default: employee
+
+    UserUpdateRequest:
+      type: object
+      properties:
+        real_name:
+          type: string
+        email:
+          type: string
+        avatar:
+          type: string
+
+    UserListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    # Session
+    Session:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenant_id:
+          type: integer
+        user_id:
+          type: integer
+        customer_id:
+          type: integer
+        channel:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        session_id:
+          type: string
+        last_message_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    SessionListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/Session'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    # Message
+    Message:
+      type: object
+      properties:
+        id:
+          type: integer
+        session_id:
+          type: integer
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+        attachments:
+          type: array
+          items:
+            type: object
+        created_at:
+          type: string
+          format: date-time
+
+    MessageListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    # Agent
+    ChatResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        session_id:
+          type: integer
+        task_id:
+          type: string
+        results:
+          type: object
+
+    ImportResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        imported_count:
+          type: integer
+        failed_count:
+          type: integer
+        errors:
+          type: array
+          items:
+            type: object
+        results:
+          type: array
+          items:
+            type: object
+
+    QueryResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+        chart_url:
+          type: string
+        export_url:
+          type: string
+        sql:
+          type: string
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+        session_id:
+          type: integer
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        progress:
+          type: integer
+        result:
+          type: object
+        error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TaskListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    Tool:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        parameters:
+          type: object
+        enabled:
+          type: boolean
+
+    ToolListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tool'
+
+    ToolExecutionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        result:
+          type: object
+        error:
+          type: string
+
+    # File
+    File:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        size:
+          type: integer
+        mime_type:
+          type: string
+        category:
+          type: string
+        url:
+          type: string
+        created_by:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    FileUploadResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        size:
+          type: integer
+        url:
+          type: string
+
+    FileListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/File'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    ParseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            type: object
+        structure:
+          type: object
+        errors:
+          type: array
+          items:
+            type: string
+
+    # ERP
+    ERPItemListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    ERPItemCreateRequest:
+      type: object
+      required:
+        - item_code
+        - item_name
+      properties:
+        item_code:
+          type: string
+        item_name:
+          type: string
+        item_group:
+          type: string
+        stock_uom:
+          type: string
+        description:
+          type: string
+
+    ERPCustomerListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+
+    ERPOrderListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    SyncResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        erp_id:
+          type: string
+        message:
+          type: string
+
+    # Token
+    TokenRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        tenant_id:
+          type: integer
+        user_id:
+          type: integer
+        session_id:
+          type: integer
+        round:
+          type: integer
+        model:
+          type: string
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    TokenRecordListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenRecord'
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+
+    TokenStatistics:
+      type: object
+      properties:
+        total_tokens:
+          type: integer
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        total_cost:
+          type: number
+        by_model:
+          type: object
+        by_user:
+          type: object
+
+    TokenUsage:
+      type: object
+      properties:
+        tenant_id:
+          type: integer
+        used_tokens:
+          type: integer
+        limit_tokens:
+          type: integer
+        used_percentage:
+          type: number
+
+    # Subscription
+    Package:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        level:
+          type: string
+          enum: [basic, pro, enterprise]
+        price:
+          type: number
+        duration:
+          type: integer
+        features:
+          type: object
+        limits:
+          type: object
+
+    PackageListResponse:
+      type: object
+      properties:
+        list:
+          type: array
+          items:
+            $ref: '#/components/schemas/Package'
+
+    # Admin
+    MetricsResponse:
+      type: object
+      properties:
+        active_tenants:
+          type: integer
+        total_requests:
+          type: integer
+        total_tokens:
+          type: integer
+        error_rate:
+          type: number
+        avg_response_time:
+          type: number
+        by_day:
+          type: array
+          items:
+            type: object
