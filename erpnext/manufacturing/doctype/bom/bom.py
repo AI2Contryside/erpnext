@@ -1385,14 +1385,18 @@ def get_bom_items_as_dict(
 ):
 	item_dict = {}
 
-	group_by_cond = "group by item_code, stock_uom, operation"
+	# NOTE: qualify every column in GROUP BY — `item_code` exists on both
+	# bom_item and item tables; PG rejects the unqualified form.
+	group_by_cond = "group by bom_item.item_code, item.stock_uom, bom_item.operation"
 	if frappe.get_cached_value("BOM", bom, "track_semi_finished_goods"):
 		fetch_exploded = 0
-		group_by_cond = "group by item_code, operation_row_id, stock_uom"
+		group_by_cond = (
+			"group by bom_item.item_code, bom_item.operation_row_id, item.stock_uom"
+		)
 
 	if fetch_secondary_items:
 		fetch_exploded = 0
-		group_by_cond = "group by item_code"
+		group_by_cond = "group by bom_item.item_code"
 
 	# Did not use qty_consumed_per_unit in the query, as it leads to rounding loss
 	query = """select
@@ -1421,7 +1425,7 @@ def get_bom_items_as_dict(
 				and (item.is_stock_item in (1, {is_stock_item})
 				{where_conditions}
 				{group_by_cond}
-				order by idx"""
+				order by bom_item.idx"""
 
 	is_stock_item = cint(not include_non_stock_items)
 	if cint(fetch_exploded):
@@ -1452,16 +1456,34 @@ def get_bom_items_as_dict(
 
 		items = frappe.db.sql(query, {"qty": qty, "bom": bom, "company": company}, as_dict=True)
 	else:
+		# PG requires every non-aggregate column in SELECT to appear in
+		# GROUP BY. Extend the base GROUP BY with all row-level columns
+		# this branch projects; on MariaDB it's a superset of the
+		# original grouping and produces the same result.
+		group_by_cond_full = (
+			group_by_cond
+			+ ", bom_item.idx, item.item_name, item.image, bom.project,"
+			" item.item_group, item.allow_alternative_item,"
+			" item_default.default_warehouse, item_default.expense_account,"
+			" item_default.buying_cost_center, bom_item.rate, bom_item.uom,"
+			" bom_item.conversion_factor, bom_item.source_warehouse,"
+			" bom_item.include_item_in_manufacturing,"
+			" bom_item.sourced_by_supplier, bom_item.description,"
+			" bom_item.base_rate, bom_item.operation_row_id,"
+			" bom_item.is_phantom_item, bom_item.bom_no"
+		)
 		query = query.format(
 			table="BOM Item",
-			where_conditions="or bom_item.is_phantom_item)",
+			# PG requires a boolean operand for OR; `is_phantom_item` is stored
+			# as smallint. Compare explicitly so both MariaDB and PG accept it.
+			where_conditions="or bom_item.is_phantom_item = 1)",
 			is_stock_item=is_stock_item,
 			qty_field="stock_qty" if fetch_qty_in_stock_uom else "qty",
 			select_columns=""", bom_item.rate, bom_item.uom, bom_item.conversion_factor, bom_item.source_warehouse,
 				bom_item.operation, bom_item.include_item_in_manufacturing, bom_item.sourced_by_supplier,
 				sum(bom_item.stock_qty/ifnull(bom.quantity, 1)) * bom_item.rate * %(qty)s as amount,
 				bom_item.description, bom_item.base_rate as rate, bom_item.operation_row_id, bom_item.is_phantom_item , bom_item.bom_no """,
-			group_by_cond=group_by_cond,
+			group_by_cond=group_by_cond_full,
 		)
 		items = frappe.db.sql(query, {"qty": qty, "bom": bom, "company": company}, as_dict=True)
 

@@ -860,6 +860,9 @@ def get_sre_reserved_warehouses_for_voucher(
 ) -> list:
 	"""Returns a list of warehouses where the stock is reserved for the provided voucher."""
 
+	# NOTE: dropped `.orderby(sre.creation)` — incompatible with SELECT DISTINCT
+	# on PostgreSQL (ORDER BY columns must appear in SELECT list). The result is
+	# a deduplicated list of warehouses; caller treats it as an unordered set.
 	sre = frappe.qb.DocType("Stock Reservation Entry")
 	query = (
 		frappe.qb.from_(sre)
@@ -871,7 +874,6 @@ def get_sre_reserved_warehouses_for_voucher(
 			& (sre.voucher_no == voucher_no)
 			& (sre.delivered_qty < sre.reserved_qty)
 		)
-		.orderby(sre.creation)
 	)
 
 	if voucher_detail_no:

@@ -2358,6 +2358,11 @@ class QueryPaymentLedger:
 				)
 
 		# build query for voucher amount
+		# NOTE: PostgreSQL requires every non-aggregate column in SELECT to appear
+		# in GROUP BY. For a given (voucher_type, voucher_no, party_type, party),
+		# the additional fields (account, posting_date, due_date, account_currency,
+		# cost_center, remarks) are expected to be invariant in Payment Ledger
+		# Entry rows; adding them to GROUP BY is safe on both MariaDB and PG.
 		query_voucher_amount = (
 			qb.from_(ple)
 			.select(
@@ -2379,10 +2384,22 @@ class QueryPaymentLedger:
 			.where(Criterion.all(self.common_filter))
 			.where(Criterion.all(self.dimensions_filter))
 			.where(Criterion.all(self.voucher_posting_date))
-			.groupby(ple.voucher_type, ple.voucher_no, ple.party_type, ple.party)
+			.groupby(
+				ple.account,
+				ple.voucher_type,
+				ple.voucher_no,
+				ple.party_type,
+				ple.party,
+				ple.posting_date,
+				ple.due_date,
+				ple.account_currency,
+				ple.cost_center,
+				ple.remarks,
+			)
 		)
 
 		# build query for voucher outstanding
+		# NOTE: same PG GROUP BY requirement as above.
 		query_voucher_outstanding = (
 			qb.from_(ple)
 			.select(
@@ -2400,7 +2417,16 @@ class QueryPaymentLedger:
 			.where(ple.delinked == 0)
 			.where(Criterion.all(filter_on_against_voucher_no))
 			.where(Criterion.all(self.common_filter))
-			.groupby(ple.against_voucher_type, ple.against_voucher_no, ple.party_type, ple.party)
+			.groupby(
+				ple.account,
+				ple.against_voucher_type,
+				ple.against_voucher_no,
+				ple.party_type,
+				ple.party,
+				ple.posting_date,
+				ple.due_date,
+				ple.account_currency,
+			)
 		)
 
 		# build CTE for combining voucher amount and outstanding
