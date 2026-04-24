@@ -74,10 +74,9 @@ leaderboards = "erpnext.startup.leaderboard.get_leaderboards"
 filters_config = "erpnext.startup.filters.get_filters_config"
 additional_print_settings = "erpnext.controllers.print_settings.get_print_settings"
 
-on_session_creation = [
-	"erpnext.portal.utils.create_customer_or_supplier",
-	"erpnext.portal.utils.set_tenant_id",
-]
+on_session_creation = "erpnext.portal.utils.create_customer_or_supplier"
+
+before_request = ["erpnext.tenant_isolation.apply_tenant_context"]
 
 treeviews = [
 	"Account",
@@ -351,11 +350,8 @@ doc_events = {
 		"validate": [
 			"erpnext.support.doctype.service_level_agreement.service_level_agreement.apply",
 			"erpnext.setup.doctype.transaction_deletion_record.transaction_deletion_record.check_for_running_deletion_job",
-			"erpnext.portal.utils.auto_set_tenant_id",
 		],
-	},
-	"DocType": {
-		"after_insert": "erpnext.portal.utils.setup_tenant_rls",
+		"before_insert": "erpnext.tenant_isolation.stamp_tenant_on_insert",
 	},
 	tuple(period_closing_doctypes): {
 		"validate": "erpnext.accounts.doctype.accounting_period.accounting_period.validate_accounting_period_on_doc_save",

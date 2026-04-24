@@ -3,9 +3,11 @@
 
 import click
 
+from erpnext.commands import tenant
+
 
 def call_command(cmd, context):
 	return click.Context(cmd, obj=context).forward(cmd)
 
 
-commands = []
+commands = [*tenant.commands]
