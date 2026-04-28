@@ -317,6 +317,11 @@ _TENANT_SUFFIX = "_tenant"
 
 
 def _ensure_backup_table() -> None:
+	"""Create the backup table and commit immediately so it survives any
+	per-DocType ``rollback()`` later in the run. Postgres DDL is
+	transactional, so without this commit a single failed DocType wipes
+	the table and cascades into ``relation does not exist`` for every
+	subsequent DocType."""
 	frappe.db.sql(
 		f"""
 		CREATE TABLE IF NOT EXISTS {_BACKUP_TABLE} (
@@ -336,6 +341,7 @@ def _ensure_backup_table() -> None:
 		f"""CREATE INDEX IF NOT EXISTS {_BACKUP_TABLE}_table_idx
 		    ON {_BACKUP_TABLE} (table_name)"""
 	)
+	frappe.db.commit()
 
 
 def _suffix_tenant(name: str) -> str:
@@ -628,13 +634,15 @@ def rewrite_tenant_unique_keys(
 						f"partial={result['skipped_partial']}, "
 						f"primary={result['skipped_primary']})"
 					)
+				# Commit per-DocType so a later failure cannot roll back
+				# successful rewrites for earlier DocTypes.
+				if not dry_run:
+					frappe.db.commit()
 			except Exception as exc:
 				totals["error"] += 1
 				frappe.db.rollback()
 				click.secho(f"  error      {dt}: {exc}", fg="red")
 				continue
-		if not dry_run:
-			frappe.db.commit()
 		click.echo("")
 		for key, n in totals.items():
 			click.echo(f"{key}: {n}")
@@ -677,13 +685,13 @@ def revert_tenant_unique_keys(
 					totals[k] += v
 				if result["reverted"]:
 					click.echo(f"  reverted {result['reverted']:>3}  {dt}")
+				if not dry_run:
+					frappe.db.commit()
 			except Exception as exc:
 				totals["error"] += 1
 				frappe.db.rollback()
 				click.secho(f"  error      {dt}: {exc}", fg="red")
 				continue
-		if not dry_run:
-			frappe.db.commit()
 		click.echo("")
 		for key, n in totals.items():
 			click.echo(f"{key}: {n}")
