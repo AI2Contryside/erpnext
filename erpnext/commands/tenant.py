@@ -14,13 +14,22 @@ Typical rollout sequence
 2. ``bench --site <site> backfill-tenant-id --tenant <default_tenant>``
       Populates NULL ``tenant_id`` on existing rows. Safe to re-run.
 
-3. ``bench --site <site> enable-tenant-rls --all``
+3. ``bench --site <site> rewrite-tenant-unique-keys --all``
+      Drops every non-partial UNIQUE index/constraint on tables that carry
+      ``tenant_id`` and recreates it with ``tenant_id`` prepended, so two
+      tenants can share otherwise-unique values (Item.item_code,
+      Customer.tax_id, the ``name`` PK, etc.) without colliding at the
+      database layer. Original definitions are stashed in
+      ``_tenant_unique_index_backup`` so the change is reversible.
+
+4. ``bench --site <site> enable-tenant-rls --all``
       Enables Row Level Security and creates the isolation policy on every
       table that has a ``tenant_id`` column. After this point, any query
       that runs without ``app.current_tenant`` set sees zero rows from
       tenant-scoped tables — including background jobs. Be prepared.
 
-4. ``bench --site <site> disable-tenant-rls --all`` (emergency only).
+5. ``bench --site <site> disable-tenant-rls --all`` (emergency only).
+6. ``bench --site <site> revert-tenant-unique-keys --all`` (emergency only).
 """
 
 from __future__ import annotations
@@ -302,4 +311,393 @@ def backfill_tenant_id(
 		frappe.destroy()
 
 
-commands = [add_tenant_id, enable_tenant_rls, disable_tenant_rls, backfill_tenant_id]
+_BACKUP_TABLE = "_tenant_unique_index_backup"
+_PG_IDENT_MAX = 63
+_TENANT_SUFFIX = "_tenant"
+
+
+def _ensure_backup_table() -> None:
+	frappe.db.sql(
+		f"""
+		CREATE TABLE IF NOT EXISTS {_BACKUP_TABLE} (
+			id BIGSERIAL PRIMARY KEY,
+			table_name TEXT NOT NULL,
+			original_index_name TEXT NOT NULL,
+			constraint_name TEXT,
+			is_primary BOOLEAN NOT NULL,
+			columns TEXT[] NOT NULL,
+			original_definition TEXT NOT NULL,
+			new_object_name TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)
+		"""
+	)
+	frappe.db.sql(
+		f"""CREATE INDEX IF NOT EXISTS {_BACKUP_TABLE}_table_idx
+		    ON {_BACKUP_TABLE} (table_name)"""
+	)
+
+
+def _suffix_tenant(name: str) -> str:
+	"""Append ``_tenant`` to ``name``, truncating to PG's 63-byte identifier
+	limit. Idempotent: a name that already ends with the suffix is returned
+	unchanged so re-runs do not double-suffix."""
+	if name.endswith(_TENANT_SUFFIX):
+		return name
+	available = _PG_IDENT_MAX - len(_TENANT_SUFFIX)
+	base = name if len(name) <= available else name[:available]
+	return base + _TENANT_SUFFIX
+
+
+def _list_unique_indexes(table: str) -> list[dict]:
+	"""Return every UNIQUE index on ``table`` together with metadata needed to
+	decide whether (and how) to rewrite it. ``columns`` is ordered by index
+	column position; system columns (attnum <= 0) are filtered out."""
+	return frappe.db.sql(
+		"""
+		SELECT
+			i.indexrelid AS oid,
+			c2.relname AS index_name,
+			i.indisprimary AS is_primary,
+			i.indpred IS NOT NULL AS is_partial,
+			(
+				SELECT array_agg(a.attname ORDER BY ord)
+				FROM unnest(i.indkey::int[]) WITH ORDINALITY AS k(attnum, ord)
+				JOIN pg_attribute a
+				  ON a.attrelid = c.oid AND a.attnum = k.attnum
+				WHERE k.attnum > 0
+			) AS columns,
+			pg_get_indexdef(i.indexrelid) AS definition,
+			(
+				SELECT con.conname FROM pg_constraint con
+				WHERE con.conindid = i.indexrelid
+				LIMIT 1
+			) AS constraint_name
+		FROM pg_index i
+		JOIN pg_class c  ON c.oid  = i.indrelid
+		JOIN pg_class c2 ON c2.oid = i.indexrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relname = %s
+		  AND n.nspname = current_schema()
+		  AND i.indisunique
+		""",
+		(table,),
+		as_dict=True,
+	)
+
+
+def _quote_ident(name: str) -> str:
+	return '"' + name.replace('"', '""') + '"'
+
+
+def _column_list(cols: list[str]) -> str:
+	return ", ".join(_quote_ident(c) for c in cols)
+
+
+def _record_backup(
+	table: str,
+	idx: dict,
+	new_object_name: str,
+) -> None:
+	frappe.db.sql(
+		f"""
+		INSERT INTO {_BACKUP_TABLE}
+			(table_name, original_index_name, constraint_name, is_primary,
+			 columns, original_definition, new_object_name)
+		VALUES (%s, %s, %s, %s, %s, %s, %s)
+		""",
+		(
+			table,
+			idx["index_name"],
+			idx["constraint_name"],
+			bool(idx["is_primary"]),
+			list(idx["columns"] or []),
+			idx["definition"],
+			new_object_name,
+		),
+	)
+
+
+def _rewrite_unique_index(table: str, idx: dict) -> str:
+	"""Drop ``idx`` and recreate it with ``tenant_id`` prepended. Returns the
+	name of the new index/constraint so it can be reported and stored."""
+	cols = list(idx["columns"] or [])
+	new_cols = ["tenant_id", *cols]
+	col_sql = _column_list(new_cols)
+	table_ident = _quote_ident(table)
+
+	if idx["is_primary"]:
+		# Recreate as composite PRIMARY KEY. We keep the same constraint name
+		# so anything that pins it (rare in Frappe) keeps working.
+		pk_name = idx["constraint_name"] or f"{table}_pkey"
+		new_name = pk_name  # reuse name; the *shape* is what changed
+		_record_backup(table, idx, new_name)
+		frappe.db.sql(f'ALTER TABLE {table_ident} DROP CONSTRAINT {_quote_ident(pk_name)}')
+		frappe.db.sql(
+			f'ALTER TABLE {table_ident} ADD CONSTRAINT {_quote_ident(new_name)} PRIMARY KEY ({col_sql})'
+		)
+		return new_name
+
+	if idx["constraint_name"]:
+		# Constraint-backed UNIQUE — must drop the constraint (which drops the
+		# index) and recreate as a constraint so pg_constraint stays in sync.
+		old_con = idx["constraint_name"]
+		new_name = _suffix_tenant(old_con)
+		_record_backup(table, idx, new_name)
+		frappe.db.sql(f'ALTER TABLE {table_ident} DROP CONSTRAINT {_quote_ident(old_con)}')
+		frappe.db.sql(
+			f'ALTER TABLE {table_ident} ADD CONSTRAINT {_quote_ident(new_name)} UNIQUE ({col_sql})'
+		)
+		return new_name
+
+	# Plain unique index, not constraint-backed.
+	old_name = idx["index_name"]
+	new_name = _suffix_tenant(old_name)
+	_record_backup(table, idx, new_name)
+	frappe.db.sql(f'DROP INDEX {_quote_ident(old_name)}')
+	frappe.db.sql(
+		f'CREATE UNIQUE INDEX {_quote_ident(new_name)} ON {table_ident} ({col_sql})'
+	)
+	return new_name
+
+
+def _rewrite_doctype_unique_keys(
+	doctype: str, include_primary: bool, dry_run: bool
+) -> dict:
+	counts = {
+		"rewritten": 0,
+		"already_tenant_scoped": 0,
+		"skipped_partial": 0,
+		"skipped_primary": 0,
+		"skipped_no_column": 0,
+		"skipped_no_table": 0,
+	}
+	if not frappe.db.table_exists(doctype):
+		counts["skipped_no_table"] = 1
+		return counts
+	if not frappe.db.has_column(doctype, "tenant_id"):
+		counts["skipped_no_column"] = 1
+		return counts
+	table = f"tab{doctype}"
+	for idx in _list_unique_indexes(table):
+		cols = list(idx["columns"] or [])
+		if "tenant_id" in cols:
+			counts["already_tenant_scoped"] += 1
+			continue
+		if idx["is_partial"]:
+			# Partial uniques carry a WHERE predicate that may interact with
+			# tenant_id semantics in non-obvious ways — surface them instead
+			# of silently rewriting.
+			counts["skipped_partial"] += 1
+			continue
+		if idx["is_primary"] and not include_primary:
+			counts["skipped_primary"] += 1
+			continue
+		if dry_run:
+			counts["rewritten"] += 1
+			continue
+		_rewrite_unique_index(table, idx)
+		counts["rewritten"] += 1
+	return counts
+
+
+def _revert_doctype_unique_keys(doctype: str, dry_run: bool) -> dict:
+	counts = {"reverted": 0, "skipped_no_backup": 0, "error": 0}
+	if not frappe.db.table_exists(doctype):
+		return counts
+	table = f"tab{doctype}"
+	rows = frappe.db.sql(
+		f"""SELECT id, original_index_name, constraint_name, is_primary,
+		           original_definition, new_object_name
+		    FROM {_BACKUP_TABLE}
+		    WHERE table_name = %s
+		    ORDER BY id DESC""",
+		(table,),
+		as_dict=True,
+	)
+	if not rows:
+		counts["skipped_no_backup"] = 1
+		return counts
+	table_ident = _table_ident(doctype)
+	for r in rows:
+		try:
+			if dry_run:
+				counts["reverted"] += 1
+				continue
+			# Drop the rewritten object first.
+			if r["is_primary"]:
+				frappe.db.sql(
+					f'ALTER TABLE {table_ident} DROP CONSTRAINT {_quote_ident(r["new_object_name"])}'
+				)
+			elif r["constraint_name"]:
+				frappe.db.sql(
+					f'ALTER TABLE {table_ident} DROP CONSTRAINT {_quote_ident(r["new_object_name"])}'
+				)
+			else:
+				frappe.db.sql(f'DROP INDEX IF EXISTS {_quote_ident(r["new_object_name"])}')
+			# Re-execute the captured CREATE INDEX / pg_get_indexdef output.
+			# For PK and constraint-backed uniques the captured text is the
+			# index definition — we still need an ALTER TABLE … ADD CONSTRAINT
+			# for those. pg_get_indexdef returns the index DDL even when the
+			# index backs a constraint, so we rebuild the constraint by name
+			# rather than executing the raw text.
+			if r["is_primary"]:
+				# Reconstruct PK from backup metadata (columns array).
+				orig = frappe.db.sql(
+					f"""SELECT columns FROM {_BACKUP_TABLE}
+					    WHERE id = %s""",
+					(r["id"],),
+					as_dict=True,
+				)
+				cols = list(orig[0]["columns"]) if orig else []
+				frappe.db.sql(
+					f'ALTER TABLE {table_ident} ADD CONSTRAINT {_quote_ident(r["original_index_name"] or table + "_pkey")} '
+					f'PRIMARY KEY ({_column_list(cols)})'
+				)
+			elif r["constraint_name"]:
+				orig = frappe.db.sql(
+					f"""SELECT columns FROM {_BACKUP_TABLE}
+					    WHERE id = %s""",
+					(r["id"],),
+					as_dict=True,
+				)
+				cols = list(orig[0]["columns"]) if orig else []
+				frappe.db.sql(
+					f'ALTER TABLE {table_ident} ADD CONSTRAINT {_quote_ident(r["constraint_name"])} '
+					f'UNIQUE ({_column_list(cols)})'
+				)
+			else:
+				# Plain unique index — replay the saved CREATE INDEX text.
+				frappe.db.sql(r["original_definition"])
+			frappe.db.sql(
+				f"DELETE FROM {_BACKUP_TABLE} WHERE id = %s",
+				(r["id"],),
+			)
+			counts["reverted"] += 1
+		except Exception as exc:
+			counts["error"] += 1
+			frappe.db.rollback()
+			click.secho(f"  error      {doctype} ({r['original_index_name']}): {exc}", fg="red")
+	return counts
+
+
+@click.command("rewrite-tenant-unique-keys")
+@click.argument("doctypes", nargs=-1)
+@click.option("--all", "all_flag", is_flag=True, help="Apply to every DocType that has tenant_id.")
+@click.option(
+	"--include-primary/--no-include-primary",
+	default=True,
+	show_default=True,
+	help="Also rewrite the PRIMARY KEY on `name` so two tenants can share a `name` value.",
+)
+@click.option("--dry-run", is_flag=True, help="Show what would change without altering DDL.")
+@pass_context
+def rewrite_tenant_unique_keys(
+	context, doctypes: tuple[str, ...], all_flag: bool, include_primary: bool, dry_run: bool
+):
+	"""Rewrite UNIQUE indexes/constraints on tenant-scoped tables to include
+	``tenant_id``. Run after ``add-tenant-id`` + ``backfill-tenant-id`` and
+	before ``enable-tenant-rls``."""
+	site = get_site(context)
+	frappe.init(site=site)
+	frappe.connect()
+	try:
+		_require_postgres()
+		_ensure_backup_table()
+		targets = _target_doctypes(doctypes, all_flag)
+		totals = {
+			"rewritten": 0,
+			"already_tenant_scoped": 0,
+			"skipped_partial": 0,
+			"skipped_primary": 0,
+			"skipped_no_column": 0,
+			"skipped_no_table": 0,
+			"error": 0,
+		}
+		for dt in targets:
+			try:
+				result = _rewrite_doctype_unique_keys(dt, include_primary, dry_run)
+				for k, v in result.items():
+					totals[k] += v
+				if result["rewritten"]:
+					click.echo(f"  rewrote {result['rewritten']:>3}  {dt}")
+				elif result["already_tenant_scoped"] or result["skipped_partial"]:
+					click.echo(
+						f"  noop          {dt}  "
+						f"(already={result['already_tenant_scoped']}, "
+						f"partial={result['skipped_partial']}, "
+						f"primary={result['skipped_primary']})"
+					)
+			except Exception as exc:
+				totals["error"] += 1
+				frappe.db.rollback()
+				click.secho(f"  error      {dt}: {exc}", fg="red")
+				continue
+		if not dry_run:
+			frappe.db.commit()
+		click.echo("")
+		for key, n in totals.items():
+			click.echo(f"{key}: {n}")
+		if dry_run:
+			click.echo("\n(dry-run — no DDL executed)")
+	finally:
+		frappe.destroy()
+
+
+@click.command("revert-tenant-unique-keys")
+@click.argument("doctypes", nargs=-1)
+@click.option("--all", "all_flag", is_flag=True, help="Revert every DocType that has a backup row.")
+@click.option("--dry-run", is_flag=True, help="Show what would be reverted without altering DDL.")
+@pass_context
+def revert_tenant_unique_keys(
+	context, doctypes: tuple[str, ...], all_flag: bool, dry_run: bool
+):
+	"""Reverse a prior ``rewrite-tenant-unique-keys`` run by replaying the
+	original index/constraint definitions saved in the backup table.
+	Emergency-only — RLS will not protect against cross-tenant value
+	collisions once the tenant-scoped uniques are gone."""
+	site = get_site(context)
+	frappe.init(site=site)
+	frappe.connect()
+	try:
+		_require_postgres()
+		_ensure_backup_table()
+		if all_flag and not doctypes:
+			rows = frappe.db.sql(
+				f"SELECT DISTINCT table_name FROM {_BACKUP_TABLE} ORDER BY table_name"
+			)
+			targets = [r[0][len("tab"):] for r in rows if r[0].startswith("tab")]
+		else:
+			targets = _target_doctypes(doctypes, all_flag)
+		totals = {"reverted": 0, "skipped_no_backup": 0, "error": 0}
+		for dt in targets:
+			try:
+				result = _revert_doctype_unique_keys(dt, dry_run)
+				for k, v in result.items():
+					totals[k] += v
+				if result["reverted"]:
+					click.echo(f"  reverted {result['reverted']:>3}  {dt}")
+			except Exception as exc:
+				totals["error"] += 1
+				frappe.db.rollback()
+				click.secho(f"  error      {dt}: {exc}", fg="red")
+				continue
+		if not dry_run:
+			frappe.db.commit()
+		click.echo("")
+		for key, n in totals.items():
+			click.echo(f"{key}: {n}")
+		if dry_run:
+			click.echo("\n(dry-run — no DDL executed)")
+	finally:
+		frappe.destroy()
+
+
+commands = [
+	add_tenant_id,
+	enable_tenant_rls,
+	disable_tenant_rls,
+	backfill_tenant_id,
+	rewrite_tenant_unique_keys,
+	revert_tenant_unique_keys,
+]
