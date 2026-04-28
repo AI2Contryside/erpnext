@@ -34,6 +34,7 @@ Typical rollout sequence
 
 from __future__ import annotations
 
+import json
 from typing import Iterable
 
 import click
@@ -322,6 +323,11 @@ def _ensure_backup_table() -> None:
 	transactional, so without this commit a single failed DocType wipes
 	the table and cascades into ``relation does not exist`` for every
 	subsequent DocType."""
+	# ``columns`` is JSONB rather than TEXT[] because Frappe's parameter
+	# binding renders a Python list as a tuple literal (e.g. ``('name')``),
+	# which Postgres parses as a record/composite — not a text array — and
+	# the insert fails with ``malformed array literal``. JSON sidesteps that
+	# by sending a string we control.
 	frappe.db.sql(
 		f"""
 		CREATE TABLE IF NOT EXISTS {_BACKUP_TABLE} (
@@ -330,7 +336,7 @@ def _ensure_backup_table() -> None:
 			original_index_name TEXT NOT NULL,
 			constraint_name TEXT,
 			is_primary BOOLEAN NOT NULL,
-			columns TEXT[] NOT NULL,
+			columns JSONB NOT NULL,
 			original_definition TEXT NOT NULL,
 			new_object_name TEXT NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -341,6 +347,24 @@ def _ensure_backup_table() -> None:
 		f"""CREATE INDEX IF NOT EXISTS {_BACKUP_TABLE}_table_idx
 		    ON {_BACKUP_TABLE} (table_name)"""
 	)
+	# Self-heal an older schema (the first revision used TEXT[] for ``columns``,
+	# which Frappe's parameter binding could not populate). If the table is
+	# empty we silently upgrade in place; if it has rows we refuse rather than
+	# silently discarding operator-visible backup metadata.
+	col_type = frappe.db.sql(
+		f"""SELECT udt_name FROM information_schema.columns
+		    WHERE table_name = '{_BACKUP_TABLE}' AND column_name = 'columns'""",
+	)
+	if col_type and col_type[0][0] != "jsonb":
+		row_count = frappe.db.sql(f"SELECT COUNT(*) FROM {_BACKUP_TABLE}")[0][0]
+		if row_count:
+			raise click.ClickException(
+				f"{_BACKUP_TABLE}.columns is {col_type[0][0]} but holds {row_count} row(s); "
+				"manual migration required — convert to JSONB or drop after verifying."
+			)
+		frappe.db.sql(
+			f"ALTER TABLE {_BACKUP_TABLE} ALTER COLUMN columns TYPE JSONB USING '[]'::jsonb"
+		)
 	frappe.db.commit()
 
 
@@ -400,6 +424,25 @@ def _column_list(cols: list[str]) -> str:
 	return ", ".join(_quote_ident(c) for c in cols)
 
 
+def _load_backup_columns(backup_id: int) -> list[str]:
+	"""Read the JSON-encoded column list back out of the backup table.
+	Postgres returns JSONB to psycopg2 as already-decoded Python objects, so
+	this also tolerates the case where the driver hands back a list directly."""
+	row = frappe.db.sql(
+		f"SELECT columns FROM {_BACKUP_TABLE} WHERE id = %s",
+		(backup_id,),
+		as_dict=True,
+	)
+	if not row:
+		return []
+	value = row[0]["columns"]
+	if isinstance(value, list):
+		return list(value)
+	if isinstance(value, str):
+		return list(json.loads(value))
+	return []
+
+
 def _record_backup(
 	table: str,
 	idx: dict,
@@ -410,14 +453,14 @@ def _record_backup(
 		INSERT INTO {_BACKUP_TABLE}
 			(table_name, original_index_name, constraint_name, is_primary,
 			 columns, original_definition, new_object_name)
-		VALUES (%s, %s, %s, %s, %s, %s, %s)
+		VALUES (%s, %s, %s, %s::boolean, %s::jsonb, %s, %s)
 		""",
 		(
 			table,
 			idx["index_name"],
 			idx["constraint_name"],
-			bool(idx["is_primary"]),
-			list(idx["columns"] or []),
+			"true" if idx["is_primary"] else "false",
+			json.dumps(list(idx["columns"] or [])),
 			idx["definition"],
 			new_object_name,
 		),
@@ -549,25 +592,13 @@ def _revert_doctype_unique_keys(doctype: str, dry_run: bool) -> dict:
 			# rather than executing the raw text.
 			if r["is_primary"]:
 				# Reconstruct PK from backup metadata (columns array).
-				orig = frappe.db.sql(
-					f"""SELECT columns FROM {_BACKUP_TABLE}
-					    WHERE id = %s""",
-					(r["id"],),
-					as_dict=True,
-				)
-				cols = list(orig[0]["columns"]) if orig else []
+				cols = _load_backup_columns(r["id"])
 				frappe.db.sql(
 					f'ALTER TABLE {table_ident} ADD CONSTRAINT {_quote_ident(r["original_index_name"] or table + "_pkey")} '
 					f'PRIMARY KEY ({_column_list(cols)})'
 				)
 			elif r["constraint_name"]:
-				orig = frappe.db.sql(
-					f"""SELECT columns FROM {_BACKUP_TABLE}
-					    WHERE id = %s""",
-					(r["id"],),
-					as_dict=True,
-				)
-				cols = list(orig[0]["columns"]) if orig else []
+				cols = _load_backup_columns(r["id"])
 				frappe.db.sql(
 					f'ALTER TABLE {table_ident} ADD CONSTRAINT {_quote_ident(r["constraint_name"])} '
 					f'UNIQUE ({_column_list(cols)})'
