@@ -16,6 +16,12 @@ Design
 * :func:`stamp_tenant_on_insert` is wired via ``doc_events["*"]["before_insert"]``
   so new rows always receive the current session tenant; this keeps RLS
   ``WITH CHECK`` clauses satisfied without callers having to remember.
+* :func:`stamp_tenant_on_bulk_insert` covers the same ground for
+  ``frappe.db.bulk_insert`` (and, transitively, ``frappe.model.document.bulk_insert``
+  which delegates to it). Frappe's bulk path deliberately bypasses ``doc_events``
+  for speed, so the ``before_insert`` hook never fires there; the wrapper is
+  installed at module import time via :func:`_install_bulk_insert_hook` so the
+  fast path stamps ``tenant_id`` the same way the slow path does.
 
 Trust model
 -----------
@@ -143,3 +149,115 @@ def stamp_tenant_on_insert(doc: Any, method: Optional[str] = None) -> None:
 			frappe.PermissionError,
 		)
 	doc.tenant_id = session_tenant
+
+
+def stamp_tenant_on_bulk_insert(
+	doctype: str,
+	fields: list[str],
+	values: Any,
+) -> tuple[list[str], Any]:
+	"""Counterpart to :func:`stamp_tenant_on_insert` for the
+	``frappe.db.bulk_insert`` fast path. The bulk path deliberately bypasses
+	``doc_events`` for speed, so the ``before_insert`` hook never fires there;
+	without this, every caller would have to remember to populate
+	``tenant_id`` on each row, which is exactly the fragile pattern the
+	doc-event hook was designed to prevent.
+
+	Returns the (possibly-rewritten) ``(fields, values)`` to forward to the
+	original ``bulk_insert``. ``values`` is wrapped lazily so generators are
+	not materialised. No-ops outside Postgres or when no tenant context is
+	set on the session — both cases preserve the original arguments
+	unchanged so non-tenant callers (migrations, bench commands) are
+	unaffected.
+	"""
+	if not _is_postgres():
+		return fields, values
+
+	session_tenant = current_session_tenant()
+	if not session_tenant:
+		# Mirrors the no-op branch in stamp_tenant_on_insert: when there is
+		# no tenant on the session, leave the rows alone and let RLS reject
+		# them rather than silently stamping a blank value.
+		return fields, values
+
+	# Use raw column existence rather than DocField meta. The offline
+	# ``bench add-tenant-id`` adds a Custom Field whose meta lookup itself
+	# touches tenant-scoped tables (tabCustomField); ``has_column`` reads
+	# information_schema and is safe regardless of the current tenant.
+	try:
+		if not frappe.db.has_column(doctype, "tenant_id"):
+			return fields, values
+	except Exception:
+		# DocType not yet migrated, or transient DB error — fall through
+		# to the original call so the caller sees the real error rather
+		# than a confusing one from our wrapper.
+		return fields, values
+
+	fields = list(fields)
+	if "tenant_id" in fields:
+		idx = fields.index("tenant_id")
+
+		def _stamped_existing() -> Any:
+			for row in values:
+				row = list(row)
+				incoming = row[idx]
+				if not incoming:
+					row[idx] = session_tenant
+				elif incoming != session_tenant:
+					frappe.throw(
+						_("Cannot bulk_insert row with tenant_id {0} under session tenant {1}").format(
+							incoming, session_tenant
+						),
+						frappe.PermissionError,
+					)
+				yield tuple(row)
+
+		return fields, _stamped_existing()
+
+	fields.append("tenant_id")
+
+	def _stamped_appended() -> Any:
+		for row in values:
+			yield tuple(list(row) + [session_tenant])
+
+	return fields, _stamped_appended()
+
+
+def _install_bulk_insert_hook() -> None:
+	"""Wrap :meth:`frappe.database.database.Database.bulk_insert` once at
+	module import time so the fast path stamps ``tenant_id`` the same way
+	``doc_events`` does on the slow path. Idempotent — safe across reloads
+	and against repeated imports.
+
+	``frappe.model.document.bulk_insert`` ultimately delegates to
+	``frappe.db.bulk_insert`` (see ``frappe/model/document.py`` —
+	``frappe.db.bulk_insert(dt, valid_column_map[dt], docs, ...)``), so a
+	single wrapper at the database level covers both public APIs without
+	having to monkey-patch two functions in lock-step.
+	"""
+	from frappe.database.database import Database
+
+	original = Database.bulk_insert
+	if getattr(original, "_tenant_isolation_wrapped", False):
+		return
+
+	def _wrapped(self, doctype, fields, values, ignore_duplicates=False, *, chunk_size=1000):
+		new_fields, new_values = stamp_tenant_on_bulk_insert(doctype, fields, values)
+		return original(
+			self,
+			doctype,
+			new_fields,
+			new_values,
+			ignore_duplicates=ignore_duplicates,
+			chunk_size=chunk_size,
+		)
+
+	_wrapped._tenant_isolation_wrapped = True  # type: ignore[attr-defined]
+	Database.bulk_insert = _wrapped
+
+
+# Install on import. The module is loaded the first time the
+# ``before_request`` hook fires (or any other code references it), which
+# happens before any tenant-scoped bulk_insert can run inside an HTTP
+# request lifecycle.
+_install_bulk_insert_hook()
