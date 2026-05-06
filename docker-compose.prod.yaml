@@ -1,0 +1,88 @@
+# ERPNext Production Compose for Aliyun ECS.
+#
+# Pulls one image (gateway + scheduler + workers + socketio all live
+# inside it via supervisord). Postgres / Redis are external Aliyun
+# managed services — see /etc/erpnext/secrets.env for credentials.
+#
+# Required env vars in this compose file's directory (.env or shell):
+#   ERPNEXT_IMAGE   full image ref, e.g.
+#                   crpi-m5owh7sl78ijrq60-vpc.cn-hangzhou.personal.cr.aliyuncs.com/trademind-prod/trademind-erpnext:prod
+#   PORT            host port mapped to nginx (default 80)
+#
+# Required env vars in /etc/erpnext/secrets.env (chmod 600):
+#   SITE_NAME                   e.g. alb-kaswuiokwirbhe8e0b.cn-hangzhou.alb.aliyuncsslb.com
+#   ERPNEXT_DB_HOST             e.g. pgm-bp16iax6s3mnuj6c.pg.rds.aliyuncs.com
+#   ERPNEXT_DB_PORT             5432
+#   ERPNEXT_DB_PASSWORD         RDS Postgres root password (used by bench new-site)
+#   ERPNEXT_DB_ROOT_LOGIN       RDS Postgres root user (default: postgres)
+#   ERPNEXT_REDIS_HOST          e.g. r-bp1hv3qfno4k9z0yph.redis.rds.aliyuncs.com
+#   ERPNEXT_REDIS_PORT          6379
+#   ERPNEXT_REDIS_PASSWORD      Aliyun Redis requirepass (almost always set)
+#   ERPNEXT_ADMIN_PASSWORD      seeded into the new site's Administrator user
+#                               (only consumed on first run; can be omitted on
+#                               re-deploy — entrypoint won't recreate the site)
+#   GUNICORN_WORKERS            optional, default 4 (tune to vCPU count)
+#   BACKGROUND_WORKERS          optional, default 1
+#
+# Deploy:
+#   1. ssh into the ECS host
+#   2. populate /etc/erpnext/secrets.env (copy from scripts/build/secrets.env.example)
+#   3. docker login <acr-vpc-host>
+#   4. docker compose -f docker-compose.prod.yaml pull
+#   5. docker compose -f docker-compose.prod.yaml up -d
+#   6. tail logs the first time: docker compose logs -f erpnext
+#      — first start runs bench new-site (~3-5 min); subsequent restarts
+#        skip that step and only run bench migrate.
+
+services:
+  erpnext:
+    image: ${ERPNEXT_IMAGE:?ERPNEXT_IMAGE must be set, e.g. <acr-host>/trademind-prod/trademind-erpnext:prod}
+    container_name: trademind-erpnext
+    env_file:
+      - ${ERPNEXT_SECRETS_FILE:-/etc/erpnext/secrets.env}
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      # Persistent site data: per-site db credentials in site_config.json,
+      # private files (Files DocType uploads), public files, indexes.
+      # MUST survive container restarts.
+      - ${ERPNEXT_SITES_DIR:-/var/lib/erpnext/sites}:/home/frappe/frappe-bench/sites
+      # Frappe writes scheduler/worker logs to logs/ under the bench tree;
+      # mounting it lets you tail historical logs without exec-ing into
+      # the container.
+      - ${ERPNEXT_LOGS_DIR:-/var/log/erpnext}:/home/frappe/frappe-bench/logs
+    networks:
+      - trademind
+    restart: unless-stopped
+    healthcheck:
+      # /api/method/ping is the canonical frappe heartbeat — returns
+      # "pong" without touching the database. /api/method/version would
+      # also work but loads more of the framework.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/method/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s   # first boot runs new-site; allow time before failing
+
+  # nginx serves /assets/* (built JS/CSS, ~500 MB) and /files/* directly,
+  # reverse-proxies the rest to gunicorn. Without this fronting layer
+  # gunicorn would serve assets too — works, just slow at scale.
+  nginx:
+    image: nginx:alpine
+    container_name: trademind-erpnext-nginx
+    depends_on:
+      - erpnext
+    ports:
+      - "${PORT:-80}:80"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/erpnext.conf:ro
+      # Share the bench-built assets with nginx so it can serve them
+      # without proxying. Read-only mount.
+      - ${ERPNEXT_SITES_DIR:-/var/lib/erpnext/sites}:/home/frappe/frappe-bench/sites:ro
+    networks:
+      - trademind
+    restart: unless-stopped
+
+networks:
+  trademind:
+    driver: bridge
