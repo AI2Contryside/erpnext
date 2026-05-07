@@ -154,8 +154,38 @@ if [ ! -d "$SITES_DIR/$SITE_NAME" ]; then
         "$SITE_NAME"
 
     log "site '$SITE_NAME' created"
+
+    # ── First-run: enable multi-tenant row-level-security ───────────────────
+    # ERPNext's tenant model requires four offline DDL steps after install
+    # (see erpnext/erpnext/commands/tenant.py). They MUST run after the seed
+    # data has landed, because CREATE/ALTER policies on tenant-scoped tables
+    # would block the install-time inserts from `bench install-app erpnext`
+    # if RLS were on already. Doing them here folds the human "run these
+    # four commands" step into the same lifecycle as new-site.
+    #
+    # Idempotent within a fresh DB: add-tenant-id skips columns that
+    # already exist; backfill UPDATE 0 rows when nothing is NULL;
+    # rewrite-tenant-unique-keys uses a backup table and skips already-
+    # rewritten constraints; enable-tenant-rls re-applies its policy.
+    DEFAULT_TENANT="${ERPNEXT_DEFAULT_TENANT_ID:-__system__}"
+    log "enabling tenant RLS (default tenant for backfill: $DEFAULT_TENANT)"
+    bench --site "$SITE_NAME" add-tenant-id --all
+    bench --site "$SITE_NAME" backfill-tenant-id --all --tenant "$DEFAULT_TENANT"
+    bench --site "$SITE_NAME" rewrite-tenant-unique-keys --all
+    bench --site "$SITE_NAME" enable-tenant-rls --all
+    log "tenant RLS enabled"
 else
     log "site '$SITE_NAME' already exists — skipping new-site"
+
+    # On every restart, replay add-tenant-id so newly-installed apps (or
+    # newly-added DocTypes from `bench migrate`) get the column. Idempotent
+    # — skips DocTypes that already have it. The other three steps
+    # (backfill / rewrite-keys / enable-rls) are NOT replayed because
+    # rewrite-keys is destructive on already-rewritten indexes if the
+    # backup table got truncated, and re-enabling RLS is a no-op for
+    # tables already covered.
+    log "ensuring new DocTypes have tenant_id column (idempotent)"
+    bench --site "$SITE_NAME" add-tenant-id --all || warn "add-tenant-id failed (non-fatal)"
 fi
 
 # ── Roll migrations forward ──────────────────────────────────────────────────
