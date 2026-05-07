@@ -137,11 +137,15 @@ cat > "$SITES_DIR/common_site_config.json" <<EOF
   "restart_supervisor_on_update": false,
   "restart_systemd_on_update": false,
   "shallow_clone": true,
-  "live_reload": false
+  "live_reload": false,
+  "default_site": "${SITE_NAME}"
 }
 EOF
 
-# Mark default site so `bench --site $SITE_NAME` is implicit.
+# Mark default site so `bench --site $SITE_NAME` is implicit. Frappe
+# 16+ deprecates currentsite.txt in favour of common_site_config's
+# default_site, but writing both keeps compatibility with bench's
+# CLI helpers that still consult the file.
 echo "$SITE_NAME" > "$SITES_DIR/currentsite.txt"
 
 # ── First-run: create the site if its directory is missing ───────────────────
