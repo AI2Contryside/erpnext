@@ -29,7 +29,7 @@
 #     scale workers independently.
 
 ARG PYTHON_VERSION=3.14
-ARG NODE_MAJOR=20
+ARG NODE_MAJOR=24
 ARG WKHTMLTOPDF_RELEASE=0.12.6.1-3
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -43,6 +43,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Swap Debian apt repos to a China mirror so apt-get update doesn't hang
+# on deb.debian.org (bookworm-slim uses the deb822 .sources format).
+RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g; s|security.debian.org|mirrors.ustc.edu.cn|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+ || sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g; s|security.debian.org|mirrors.ustc.edu.cn|g' \
+        /etc/apt/sources.list
+
 # System deps + Node.js (for `bench build`'s asset compilation).
 # build-essential and the *-dev packages are needed because frappe pulls
 # native Python wheels (psycopg2-binary works, but lxml / xmlsec / pillow
@@ -51,9 +58,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git gnupg \
         build-essential pkg-config \
         libpq-dev libffi-dev libssl-dev \
+        default-libmysqlclient-dev \
         libjpeg-dev zlib1g-dev libtiff-dev \
         libxml2-dev libxslt1-dev libxmlsec1-dev libxmlsec1-openssl \
         libsasl2-dev libldap2-dev \
+        cron \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
@@ -93,9 +102,11 @@ RUN bench init \
 
 WORKDIR /home/frappe/frappe-bench
 
-# Pull in our erpnext fork the same way. --no-resolve-deps keeps bench
-# from re-fetching frappe; it's already wired up by `bench init`.
-RUN bench get-app --no-resolve-deps /home/frappe/_src/erpnext
+# Pull in our erpnext fork the same way. Newer bench CLI defaults to
+# not resolving deps (the old `--no-resolve-deps` flag was removed and
+# replaced by an opt-in `--resolve-deps`), so a bare `get-app` keeps
+# bench from re-fetching frappe — it's already wired up by `bench init`.
+RUN bench get-app /home/frappe/_src/erpnext
 
 # Build production-mode JS/CSS assets. This is the slowest step (~10 min
 # on first build); buildx layer caching keeps subsequent builds fast.
@@ -127,19 +138,27 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PATH="/home/frappe/.local/bin:/home/frappe/frappe-bench/env/bin:${PATH}"
 
+# Same China mirror swap as the builder stage — runtime is a fresh
+# python:slim-bookworm so it ships the upstream sources.
+RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g; s|security.debian.org|mirrors.ustc.edu.cn|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+ || sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g; s|security.debian.org|mirrors.ustc.edu.cn|g' \
+        /etc/apt/sources.list
+
 # Runtime-only system deps (no compilers, no -dev headers).
 # wkhtmltopdf MUST be the patched-Qt 0.12.6+ build for frappe's PDF render
 # to work; the apt version on bookworm doesn't include the qt patches.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg \
         libpq5 libffi8 libssl3 \
+        libmariadb3 \
         libxml2 libxslt1.1 libxmlsec1 libxmlsec1-openssl \
         libjpeg62-turbo zlib1g libtiff6 \
         libsasl2-2 libldap-2.5-0 libxrender1 libxext6 \
         redis-tools postgresql-client \
         fonts-cantarell fonts-noto-cjk fonts-noto-color-emoji fontconfig \
         xfonts-75dpi xfonts-base \
-        supervisor rsync \
+        supervisor rsync cron \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
