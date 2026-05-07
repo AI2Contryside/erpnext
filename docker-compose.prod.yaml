@@ -81,7 +81,13 @@ services:
     ports:
       - "${PORT:-80}:80"
     volumes:
-      - ./docker/nginx.conf:/etc/nginx/conf.d/erpnext.conf:ro
+      # Mount over /etc/nginx/conf.d/default.conf (the alpine image's
+      # built-in catch-all that listens :80 with server_name=localhost)
+      # rather than as a sibling — otherwise nginx's host matcher picks
+      # the localhost block before our `server_name _;` catch-all and
+      # every healthcheck / loopback request 404s out of the static
+      # /usr/share/nginx/html dir instead of being proxied to gunicorn.
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       # Share the bench-built assets with nginx so it can serve them
       # without proxying. Read-only mount.
       - ${ERPNEXT_SITES_DIR:-/var/lib/erpnext/sites}:/home/frappe/frappe-bench/sites:ro
