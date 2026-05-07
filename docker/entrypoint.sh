@@ -26,6 +26,15 @@
 #
 # Optional:
 #   ERPNEXT_DB_ROOT_LOGIN  pg superuser name (default: postgres)
+#   ERPNEXT_DB_NAME        Postgres database name to create + use for this
+#                          site. Default: derived by Frappe from SITE_NAME
+#                          via a 16-char hash (`_a1b2c3d4e5f6g7h8`). Set
+#                          this to a readable name (e.g. `erpnext`) when
+#                          sharing one RDS instance with other services.
+#                          Frappe also creates a same-named DB user with
+#                          `db_password` (auto-generated random) and
+#                          stores it in sites/<site>/site_config.json on
+#                          first run, so don't pre-create the user.
 #   ERPNEXT_REDIS_PASSWORD Redis auth (omit if Redis has no requirepass)
 #   ERPNEXT_ADMIN_PASSWORD admin password seeded into the new site
 #                          (default: random-then-printed; check container logs)
@@ -126,12 +135,19 @@ if [ ! -d "$SITES_DIR/$SITE_NAME" ]; then
         log "ERPNEXT_ADMIN_PASSWORD not set — generated: $ADMIN_PASS  (save this!)"
     fi
 
+    db_name_args=()
+    if [ -n "${ERPNEXT_DB_NAME:-}" ]; then
+        log "using explicit ERPNEXT_DB_NAME=$ERPNEXT_DB_NAME"
+        db_name_args=(--db-name "$ERPNEXT_DB_NAME")
+    fi
+
     bench new-site \
         --db-type postgres \
         --db-host "$ERPNEXT_DB_HOST" \
         --db-port "$DB_PORT" \
         --db-root-username "$DB_ROOT_LOGIN" \
         --db-root-password "$ERPNEXT_DB_PASSWORD" \
+        "${db_name_args[@]}" \
         --admin-password "$ADMIN_PASS" \
         --install-app erpnext \
         --no-mariadb-socket \
