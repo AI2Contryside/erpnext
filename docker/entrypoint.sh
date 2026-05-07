@@ -135,19 +135,65 @@ if [ ! -d "$SITES_DIR/$SITE_NAME" ]; then
         log "ERPNEXT_ADMIN_PASSWORD not set — generated: $ADMIN_PASS  (save this!)"
     fi
 
-    db_name_args=()
-    if [ -n "${ERPNEXT_DB_NAME:-}" ]; then
-        log "using explicit ERPNEXT_DB_NAME=$ERPNEXT_DB_NAME"
-        db_name_args=(--db-name "$ERPNEXT_DB_NAME")
-    fi
+    # Pre-create the site db + user ourselves so we can fix the
+    # PostgreSQL 15+ public-schema ACL before frappe tries to bootstrap.
+    #
+    # Why: Frappe's bench new-site default flow runs setup_database which
+    # CREATE DATABASE x OWNER x_user and ALTER DATABASE OWNER TO x_user,
+    # but leaves the `public` schema's owner alone. PG 15+ tightened that
+    # default — db owners no longer get implicit CREATE on `public`. The
+    # subsequent `cat framework_postgres.sql | psql` step then fails with
+    # 'permission denied for schema public' on every CREATE TABLE, which
+    # frappe (running without ON_ERROR_STOP) only notices later as a
+    # cryptic 'tabDefaultValue missing in restored site' error.
+    #
+    # Workaround that doesn't touch the frappe upstream: pre-create the
+    # objects ourselves, ALTER SCHEMA public OWNER TO the site user, then
+    # tell bench to skip its own setup phase via --no-setup-db. We also
+    # pass --db-password so bench writes our chosen secret into
+    # site_config.json instead of generating a fresh one (which would
+    # mismatch what we just CREATE'd).
+    SITE_DB_NAME="${ERPNEXT_DB_NAME:-_${SITE_NAME//[^a-zA-Z0-9]/_}}"
+    # Constrain to PG identifier rules: lowercase, alnum/underscore.
+    SITE_DB_USER="$SITE_DB_NAME"
+    # Random 32-hex secret (hex avoids quoting headaches in psql/SQL).
+    SITE_DB_PASS="$(openssl rand -hex 16)"
 
+    log "pre-creating db '$SITE_DB_NAME' + user '$SITE_DB_USER'"
+    # Idempotent — drop first so re-runs land clean. Variables are
+    # expanded by the shell (heredoc without quoted delimiter); they're
+    # safe because SITE_DB_NAME is restricted to alnum + underscore
+    # above, and SITE_DB_PASS is hex (no quotes / no $).
+    PGPASSWORD="$ERPNEXT_DB_PASSWORD" psql \
+        -h "$ERPNEXT_DB_HOST" -p "$DB_PORT" \
+        -U "$DB_ROOT_LOGIN" -d postgres \
+        -v ON_ERROR_STOP=1 \
+        <<EOF
+DROP DATABASE IF EXISTS "$SITE_DB_NAME";
+DROP USER IF EXISTS "$SITE_DB_USER";
+CREATE USER "$SITE_DB_USER" WITH PASSWORD '$SITE_DB_PASS';
+CREATE DATABASE "$SITE_DB_NAME" OWNER "$SITE_DB_USER";
+EOF
+
+    log "fixing public-schema owner inside '$SITE_DB_NAME' (PG 15+ default-ACL workaround)"
+    PGPASSWORD="$ERPNEXT_DB_PASSWORD" psql \
+        -h "$ERPNEXT_DB_HOST" -p "$DB_PORT" \
+        -U "$DB_ROOT_LOGIN" -d "$SITE_DB_NAME" \
+        -v ON_ERROR_STOP=1 \
+        <<EOF
+ALTER SCHEMA public OWNER TO "$SITE_DB_USER";
+GRANT ALL ON SCHEMA public TO "$SITE_DB_USER";
+EOF
+
+    log "running bench new-site --no-setup-db (db + user already provisioned above)"
     bench new-site \
         --db-type postgres \
         --db-host "$ERPNEXT_DB_HOST" \
         --db-port "$DB_PORT" \
-        --db-root-username "$DB_ROOT_LOGIN" \
-        --db-root-password "$ERPNEXT_DB_PASSWORD" \
-        "${db_name_args[@]}" \
+        --db-name "$SITE_DB_NAME" \
+        --db-user "$SITE_DB_USER" \
+        --db-password "$SITE_DB_PASS" \
+        --no-setup-db \
         --admin-password "$ADMIN_PASS" \
         --install-app erpnext \
         --no-mariadb-socket \
