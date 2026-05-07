@@ -121,9 +121,14 @@ RUN mkdir -p /home/frappe/sites-template \
     && cp -a sites/. /home/frappe/sites-template/
 
 # Strip dev-only artifacts to shrink the runtime layer.
+# Keep apps/frappe/node_modules — frappe's realtime server
+# (apps/frappe/socketio.js) requires `socket.io` and friends at
+# runtime. apps/erpnext/node_modules is build-time only (used by
+# `bench build --production` to compile assets) and can go.
+# Top-level node_modules is bench tooling, also build-time only.
 RUN find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
     && find . -name "*.pyc" -delete \
-    && rm -rf node_modules apps/*/node_modules apps/*/.git \
+    && rm -rf node_modules apps/erpnext/node_modules apps/*/.git \
     && rm -rf /home/frappe/_src
 
 # ─────────────────────────────────────────────────────────────────────────────
