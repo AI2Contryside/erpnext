@@ -30,6 +30,13 @@ def get_context(context):
 
 
 def get_favorite_articles_by_page_view():
+	# GROUP BY must include every non-aggregate SELECT column to satisfy
+	# PostgreSQL's strict only_full_group_by — MariaDB tolerates listing
+	# only `route` (and silently picks an arbitrary row's other column
+	# values) but PG raises "column must appear in GROUP BY". Listing
+	# the PK first lets PG's functional-dependency optimization keep the
+	# query identical in semantics; the extra columns are a no-op there
+	# and a correctness fix on PG.
 	return frappe.db.sql(
 		"""
 			SELECT
@@ -44,7 +51,7 @@ def get_favorite_articles_by_page_view():
 				`tabWeb Page View` AS t2
 			ON t1.route = t2.path
 			WHERE t1.published = 1
-			GROUP BY route
+			GROUP BY t1.name, t1.title, t1.content, t1.route, t1.category
 			ORDER BY count DESC
 			LIMIT 6;
 			""",
