@@ -185,7 +185,8 @@ else
     # backup table got truncated, and re-enabling RLS is a no-op for
     # tables already covered.
     log "ensuring new DocTypes have tenant_id column (idempotent)"
-    bench --site "$SITE_NAME" add-tenant-id --all || warn "add-tenant-id failed (non-fatal)"
+    bench --site "$SITE_NAME" add-tenant-id --all \
+        || log "WARN: add-tenant-id failed (non-fatal — see traceback above)"
 fi
 
 # ── Roll migrations forward ──────────────────────────────────────────────────
