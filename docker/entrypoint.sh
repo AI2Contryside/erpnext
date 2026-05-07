@@ -26,6 +26,12 @@
 #
 # Optional:
 #   ERPNEXT_DB_ROOT_LOGIN  pg superuser name (default: postgres)
+#   ERPNEXT_REDIS_USER     Redis ACL username (default: default).
+#                          Set this on Aliyun Cloud Redis personal-edition
+#                          to the instance id (e.g. r-bp1hv3qfno4k9z0yph)
+#                          — that's the only account name they create
+#                          and AUTH against any other (including default)
+#                          fails with WRONGPASS.
 #   ERPNEXT_DB_NAME        Postgres database name to create + use for this
 #                          site. Default: derived by Frappe from SITE_NAME
 #                          via a 16-char hash (`_a1b2c3d4e5f6g7h8`). Set
@@ -69,6 +75,7 @@ require ERPNEXT_REDIS_HOST
 DB_PORT="${ERPNEXT_DB_PORT:-5432}"
 DB_ROOT_LOGIN="${ERPNEXT_DB_ROOT_LOGIN:-postgres}"
 REDIS_PORT="${ERPNEXT_REDIS_PORT:-6379}"
+REDIS_USER="${ERPNEXT_REDIS_USER:-default}"
 REDIS_PASSWORD="${ERPNEXT_REDIS_PASSWORD:-}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-4}"
 BACKGROUND_WORKERS="${BACKGROUND_WORKERS:-1}"
@@ -78,12 +85,17 @@ BACKGROUND_WORKERS="${BACKGROUND_WORKERS:-1}"
 # so an empty-user URL (`redis://:pwd@host`) trips
 # 'WRONGPASS invalid username-password pair or user is disabled' for
 # Node clients (@redis/client), even though Python redis-py silently
-# falls back to legacy `AUTH pwd`. Use the conventional Redis 6 default
-# account `default` so both clients send `AUTH default <pwd>`.
+# falls back to legacy `AUTH pwd`.
+#
+# Aliyun's personal-edition Redis names the default account after the
+# instance id (e.g. `r-bp1hv3qfno4k9z0yph`), NOT `default`, so set
+# ERPNEXT_REDIS_USER to that instance id in /etc/erpnext/secrets.env.
+# For self-hosted Redis 6+ the conventional `default` works out of the
+# box so we keep that as the fallback.
 redis_url() {
     local db="$1"
     if [ -n "$REDIS_PASSWORD" ]; then
-        echo "redis://default:${REDIS_PASSWORD}@${ERPNEXT_REDIS_HOST}:${REDIS_PORT}/${db}"
+        echo "redis://${REDIS_USER}:${REDIS_PASSWORD}@${ERPNEXT_REDIS_HOST}:${REDIS_PORT}/${db}"
     else
         echo "redis://${ERPNEXT_REDIS_HOST}:${REDIS_PORT}/${db}"
     fi
