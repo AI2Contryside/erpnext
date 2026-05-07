@@ -57,8 +57,14 @@ services:
     healthcheck:
       # /api/method/ping is the canonical frappe heartbeat — returns
       # "pong" without touching the database. /api/method/version would
-      # also work but loads more of the framework.
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/method/ping"]
+      # also work but loads more of the framework. The Host header has
+      # to match SITE_NAME because frappe routes by host and only
+      # falls back to default_site when the request has no host at
+      # all; curl defaults to `Host: localhost` which is a valid host
+      # to frappe, so it 404s. Using CMD-SHELL so $${SITE_NAME} is
+      # expanded inside the container at runtime, not by compose at
+      # parse time.
+      test: ["CMD-SHELL", "curl -fsS -H \"Host: $${SITE_NAME}\" http://localhost:8000/api/method/ping"]
       interval: 30s
       timeout: 5s
       retries: 5
