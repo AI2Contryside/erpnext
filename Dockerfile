@@ -149,7 +149,7 @@ RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g; s|security.debian.org|mirror
 # wkhtmltopdf MUST be the patched-Qt 0.12.6+ build for frappe's PDF render
 # to work; the apt version on bookworm doesn't include the qt patches.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg \
+        ca-certificates curl gnupg git \
         libpq5 libffi8 libssl3 \
         libmariadb3 \
         libxml2 libxslt1.1 libxmlsec1 libxmlsec1-openssl \
