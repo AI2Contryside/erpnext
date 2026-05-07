@@ -73,12 +73,17 @@ REDIS_PASSWORD="${ERPNEXT_REDIS_PASSWORD:-}"
 GUNICORN_WORKERS="${GUNICORN_WORKERS:-4}"
 BACKGROUND_WORKERS="${BACKGROUND_WORKERS:-1}"
 
-# Build redis URLs with optional auth. Aliyun Cloud Redis usually requires
-# `requirepass`; URL form is redis://:<password>@host:port/<db>.
+# Build redis URLs with optional auth. Aliyun Cloud Redis 6+ enforces
+# Redis ACL: even password-only setups expect AUTH to carry a username,
+# so an empty-user URL (`redis://:pwd@host`) trips
+# 'WRONGPASS invalid username-password pair or user is disabled' for
+# Node clients (@redis/client), even though Python redis-py silently
+# falls back to legacy `AUTH pwd`. Use the conventional Redis 6 default
+# account `default` so both clients send `AUTH default <pwd>`.
 redis_url() {
     local db="$1"
     if [ -n "$REDIS_PASSWORD" ]; then
-        echo "redis://:${REDIS_PASSWORD}@${ERPNEXT_REDIS_HOST}:${REDIS_PORT}/${db}"
+        echo "redis://default:${REDIS_PASSWORD}@${ERPNEXT_REDIS_HOST}:${REDIS_PORT}/${db}"
     else
         echo "redis://${ERPNEXT_REDIS_HOST}:${REDIS_PORT}/${db}"
     fi
